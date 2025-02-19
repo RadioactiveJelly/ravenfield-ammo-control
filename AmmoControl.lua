@@ -5,14 +5,9 @@ function AmmoControl:Awake()
 	self.gameObject.name = "AmmoControl"
 end
 
-function AmmoControl:Start()
+function AmmoControl:Init()
 	-- Run when behaviour is created
 	GameEvents.onActorSpawn.AddListener(self,"onActorSpawn")
-
-	self.extraPrimaryAmmo = self.script.mutator.GetConfigurationInt("primaryAmmo")
-	self.extraSecondaryAmmo = self.script.mutator.GetConfigurationInt("secondaryAmmo")
-	self.extraSmallGear = self.script.mutator.GetConfigurationInt("smallGear")
-	self.extraLargeGear = self.script.mutator.GetConfigurationInt("largeGear")
 	
 	self.script.StartCoroutine(self:FindLoadoutChanger())
 	self.doOnce = false
@@ -24,8 +19,6 @@ function AmmoControl:Start()
 		self.scavenger = scavengerObj.GetComponent(ScriptedBehaviour)
 	end
 
-	self.ammoData = {}
-
 	local weaponPickup = self.gameObject.Find("[LQS]WeaponPickup(Clone)")
 	if weaponPickup then
 		self.weaponPickup = weaponPickup.GetComponent(ScriptedBehaviour)
@@ -36,16 +29,33 @@ function AmmoControl:Start()
 			self.weaponPickup.self:AddOnWeaponPickupListener("AmmoControl", onWeaponPickup)
 		end
 	end
-
-	self:ParseString(self.script.mutator.GetConfigurationString("line1"))
-	self:ParseString(self.script.mutator.GetConfigurationString("line2"))
-	self:ParseString(self.script.mutator.GetConfigurationString("line3"))
-	self:ParseString(self.script.mutator.GetConfigurationString("line4"))
-	self:ParseString(self.script.mutator.GetConfigurationString("line5"))
-
-	self.useBoth = self.script.mutator.GetConfigurationBool("CombineSettings")
 end
 
+function AmmoControl:SetGeneralSettings(generalSettings)
+	self.extraPrimaryAmmo = generalSettings.extraPrimaryAmmo
+	self.extraSecondaryAmmo = generalSettings.extraSecondaryAmmo
+	self.extraSmallGear = generalSettings.extraSmallGear
+	self.extraLargeGear = generalSettings.extraLargeGear
+end
+
+function AmmoControl:SetDirectSettings(directSettings)
+	self.ammoData = {}
+	for i = 1, #directSettings, 1 do
+		self:ParseString(directSettings[i])
+	end
+end
+
+function AmmoControl:DefaultSettings()
+	self.extraPrimaryAmmo = 0
+	self.extraSecondaryAmmo = 0
+	self.extraSmallGear = 0
+	self.extraLargeGear = 0
+
+	self.ammoData = {}
+	self.useBoth = true
+end
+
+--Parse string lines for weapon data
 function AmmoControl:ParseString(str)
 	for word in string.gmatch(str, '([^,]+)') do
 		local iterations = 0
@@ -54,7 +64,10 @@ function AmmoControl:ParseString(str)
 		local maxSpareAmmo = nil
 		for wrd in string.gmatch(word,'([^|]+)') do
 			if wrd ~= "-" then
-				if iterations == 0 then name = wrd end
+				if iterations == 0 then
+					--name = string.gsub(wrd,"<.->","")
+					name = wrd
+				end
 				if iterations == 1 then 
 					if wrd == "∞" then maxAmmo = 9999999999
 					else maxAmmo = tonumber(wrd) end
@@ -70,10 +83,35 @@ function AmmoControl:ParseString(str)
 		local data = {}
 		data.maxAmmo = maxAmmo
 		data.maxSpareAmmo = maxSpareAmmo
-		self.ammoData[name] = data
-
-		--self:Debug("Registered " .. name .. " with mag size of " .. maxAmmo .. " and max spare ammo of " .. maxSpareAmmo)
+		self.ammoData[string.upper(name)] = data
 	end
+end
+
+function AmmoControl:AddData(weaponName, data)
+	self.ammoData[string.upper(weaponName)] = data
+end
+
+function AmmoControl:BlackListWeapon(weaponName)
+	local cleanName = string.gsub(weaponName,"<.->","")
+
+	if self.blacklist == nil then
+		self.blacklist = {}
+	end
+
+	self.blacklist[string.upper(cleanName)] = true
+end
+
+function AmmoControl:IsWeaponBlacklisted(weaponName)
+	local cleanName = string.gsub(weaponName,"<.->","")
+
+	if self.blacklist == nil then
+		self.blacklist = {}
+	end
+
+	local result = self.blacklist[string.upper(cleanName)]
+	if result == nil then return false end
+
+	return result
 end
 
 function AmmoControl:onActorSpawn(actor)
@@ -89,7 +127,8 @@ function AmmoControl:EvaluateLoadout()
 end
 
 function AmmoControl:EvaluateWeapon(weapon, new)
-	local data = self.ammoData[weapon.weaponEntry.name]
+	local cleanName = string.gsub(weapon.weaponEntry.name,"<.->","")
+	local data = self.ammoData[cleanName]
 	if data then
 		if data.maxAmmo ~= nil then
 			weapon.maxAmmo = data.maxAmmo
@@ -115,9 +154,15 @@ function AmmoControl:EvaluateWeapon(weapon, new)
 			weapon.spareAmmo = weapon.maxSpareAmmo * self.scavenger.self.ammoScale
 		end
 	end
+
 end
 
 function AmmoControl:ApplyGeneralControl(weapon)
+	local weaponEntry = weapon.weaponEntry
+	if weaponEntry and self:IsWeaponBlacklisted(weaponEntry.name) then
+		return
+	end
+
 	local extraAmmo = 0
 	
 	if weapon.weaponEntry.slot == WeaponSlot.Primary then
